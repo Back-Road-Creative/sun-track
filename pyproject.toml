@@ -1,0 +1,54 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "sun-track"
+version = "0.1.0"
+description = "Apparent solar elevation with a golden-hour band, plus GPX track interpolation for timestamped captures. Standard library only."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+authors = [{ name = "Joe Petrucelli", email = "joepetjr@gmail.com" }]
+keywords = [
+    "sun",
+    "solar",
+    "elevation",
+    "golden-hour",
+    "noaa",
+    "gpx",
+    "geotagging",
+    "photography",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Multimedia :: Graphics",
+    "Topic :: Scientific/Engineering :: Astronomy",
+    "Typing :: Typed",
+]
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "ruff>=0.6"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/sun_track"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+# UP017: `timezone.utc` is spelled out on purpose — it reads unambiguously next
+# to the `tzinfo=` keyword and survives being pasted into older code.
+ignore = ["UP017"]
