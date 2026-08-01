@@ -9,7 +9,7 @@ description = "Apparent solar elevation with a golden-hour band, plus GPX track 
 readme = "README.md"
 requires-python = ">=3.11"
 license = { file = "LICENSE" }
-authors = [{ name = "Joe Petrucelli", email = "joepetjr@gmail.com" }]
+authors = [{ name = "Joe Petrucelli", email = "backroadcreativeco@gmail.com" }]
 keywords = [
     "sun",
     "solar",
