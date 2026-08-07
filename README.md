@@ -44,7 +44,7 @@ the other and either is useful alone.
 ## Install
 
 ```bash
-pip install sun-track
+pip install git+https://github.com/Back-Road-Creative/sun-track
 ```
 
 Requires Python 3.11 or newer. There are no runtime dependencies.
