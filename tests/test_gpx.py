@@ -218,3 +218,51 @@ def test_parse_gpx_time_accepts_the_shapes_loggers_write(text: str, expected_hou
 @pytest.mark.parametrize("text", ["", "not-a-time", "2026-13-45T99:99:99Z", "yesterday"])
 def test_parse_gpx_time_returns_none_rather_than_raising(text: str) -> None:
     assert parse_gpx_time(text) is None
+
+
+def _two_point_index(lon0: float, lon1: float) -> TrackIndex:
+    return TrackIndex(
+        (
+            (datetime(2026, 7, 30, 12, 0, tzinfo=UTC), 10.0, lon0),
+            (datetime(2026, 7, 30, 12, 10, tzinfo=UTC), 12.0, lon1),
+        )
+    )
+
+
+def _lon_distance_from_date_line(lon: float) -> float:
+    return 180.0 - abs(lon)
+
+
+@pytest.mark.parametrize(("lon0", "lon1"), [(179.0, -179.0), (-179.0, 179.0)])
+def test_interpolation_takes_the_short_arc_across_the_date_line(lon0: float, lon1: float) -> None:
+    """The midpoint of 179 -> -179 is the date line, not the prime meridian."""
+    index = _two_point_index(lon0, lon1)
+    pos = index.position_at(datetime(2026, 7, 30, 12, 5, tzinfo=UTC))
+    assert pos is not None
+    assert pos[0] == pytest.approx(11.0)
+    assert -180.0 <= pos[1] <= 180.0
+    assert _lon_distance_from_date_line(pos[1]) == pytest.approx(0.0, abs=1e-9)
+
+
+def test_date_line_quarter_points_stay_in_range_and_near_the_line() -> None:
+    index = _two_point_index(179.0, -179.0)
+    early = index.position_at(datetime(2026, 7, 30, 12, 2, 30, tzinfo=UTC))
+    late = index.position_at(datetime(2026, 7, 30, 12, 7, 30, tzinfo=UTC))
+    assert early is not None
+    assert late is not None
+    assert early[1] == pytest.approx(179.5)
+    assert late[1] == pytest.approx(-179.5)
+
+
+def test_date_line_endpoints_are_returned_unchanged() -> None:
+    index = _two_point_index(179.0, -179.0)
+    assert index.position_at(datetime(2026, 7, 30, 12, 0, tzinfo=UTC)) == (10.0, 179.0)
+    end = index.position_at(datetime(2026, 7, 30, 12, 10, tzinfo=UTC))
+    assert end == pytest.approx((12.0, -179.0))
+
+
+def test_noncrossing_long_arc_is_still_interpolated_linearly() -> None:
+    """A 100-degree step that does not cross the date line keeps its plain midpoint."""
+    index = _two_point_index(-50.0, 50.0)
+    pos = index.position_at(datetime(2026, 7, 30, 12, 5, tzinfo=UTC))
+    assert pos == pytest.approx((11.0, 0.0))

@@ -11,9 +11,10 @@ Matching is deliberately generous, because the downstream accuracy demand is
 usually low. (If you are feeding the position to a solar-elevation
 calculation, a kilometre of position error moves the answer by about a
 hundredth of a degree.) The position is linearly interpolated between the two
-bracketing track points and accepted whenever the nearer of them is within
-``max_gap_min`` minutes; tighten that argument when you need a real fix
-rather than a plausible one.
+bracketing track points (longitude along the shorter arc, so a track that
+crosses the 180th meridian stays on it) and accepted whenever the nearer of
+them is within ``max_gap_min`` minutes; tighten that argument when you need a
+real fix rather than a plausible one.
 
 Parsing never raises past the :func:`load_track_index` boundary: an unreadable
 file is skipped with one warning naming it, and a malformed point is dropped
@@ -107,7 +108,29 @@ class TrackIndex:
         if span <= 0:  # duplicate timestamps across files
             return (lat0, lon0)
         frac = (utc - t0).total_seconds() / span
-        return (lat0 + frac * (lat1 - lat0), lon0 + frac * (lon1 - lon0))
+        return (lat0 + frac * (lat1 - lat0), _interpolate_lon(lon0, lon1, frac))
+
+
+def _interpolate_lon(lon0: float, lon1: float, frac: float) -> float:
+    """Longitude ``frac`` of the way from ``lon0`` to ``lon1`` along the shorter arc.
+
+    A step wider than 180 degrees is a date-line crossing, so it is taken the
+    other way round (179 -> -179 is 2 degrees east, not 358 west) and the
+    result is wrapped back into [-180, 180]. A step that does not cross the
+    line is plain linear interpolation, and a result that never leaves the
+    range is returned untouched, so endpoints come back exactly as logged.
+    """
+    delta = lon1 - lon0
+    if delta > 180.0:
+        delta -= 360.0
+    elif delta < -180.0:
+        delta += 360.0
+    lon = lon0 + frac * delta
+    if lon > 180.0:
+        lon -= 360.0
+    elif lon < -180.0:
+        lon += 360.0
+    return lon
 
 
 def _points_from_file(path: Path) -> list[tuple[datetime, float, float]]:

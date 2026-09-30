@@ -176,7 +176,9 @@ Worth knowing before you rely on this.
   library refuses to guess.
 - **GPX interpolation is a straight line in degrees** between two logged points, not a
   path along a road and not a great circle. Over a 90-minute gap that can be far from
-  where you actually went. It is a plausible position, not a fix.
+  where you actually went. It is a plausible position, not a fix. Longitude is
+  interpolated along the shorter arc, so a leg from 179 to -179 passes through the
+  date line rather than swinging back across the prime meridian.
 - **Track points need a time.** Only `<trkpt>` elements carrying a `<time>` and valid
   `lat`/`lon` are indexed; waypoints, routes and untimed points are ignored. There is
   no filtering on reported GPS accuracy, and no plausibility check on speed.
