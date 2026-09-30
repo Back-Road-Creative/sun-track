@@ -98,6 +98,23 @@ you need a real fix:
 index.position_at(capture_utc, max_gap_min=5)
 ```
 
+The default match only looks at the nearer of the two bracketing points, so a capture
+seconds after the last point before a three-hour hole in the track is still placed,
+by interpolating across the whole hole. That is the legacy policy and stays the
+default. When a position is published as evidence of where the camera was, choose the
+strict policy explicitly:
+
+```python
+index.position_at(capture_utc, max_gap_min=30, strict=True)
+```
+
+With `strict=True`, `max_gap_min` is the largest allowed span between the two
+bracketing points: a capture inside a wider hole is refused wherever it falls, and a
+capture before the first or after the last point is refused (no snapping to an end).
+A capture landing exactly on a logged point is always accepted. Use `fix_at()` to get
+the position with an `inferred` flag: `False` only for a position the logger recorded
+at exactly that instant, `True` for anything interpolated or end-snapped.
+
 ### Both at once
 
 ```python
@@ -133,7 +150,8 @@ Everything below is importable straight from `sun_track`.
 | `is_golden_at(lat, lon, utc) -> bool` | The two calls above composed, for the common case. |
 | `GOLDEN_ELEVATION_MIN` / `GOLDEN_ELEVATION_MAX` | The band edges, `-4.0` and `6.0` degrees. |
 | `load_track_index(gpx_dir) -> TrackIndex` | Merge every `*.gpx` directly under a directory into one UTC-sorted index. Never raises. |
-| `TrackIndex.position_at(utc, max_gap_min=90.0) -> tuple[float, float] \| None` | Interpolated `(lat, lon)`, or `None` when no track point is close enough. Raises `ValueError` on a naive datetime or a negative gap. |
+| `TrackIndex.position_at(utc, max_gap_min=90.0, *, strict=False) -> tuple[float, float] \| None` | Interpolated `(lat, lon)`, or `None` when no track point is close enough (`strict=True`: when the bracketing points are too far apart). Raises `ValueError` on a naive datetime or a negative gap. |
+| `TrackIndex.fix_at(utc, max_gap_min=90.0, *, strict=False) -> TrackFix \| None` | Same lookup, returning `TrackFix(lat, lon, inferred)`. |
 | `TrackIndex.points` | The raw `(datetime, lat, lon)` tuples, sorted by time. |
 | `parse_gpx_time(text) -> datetime \| None` | ISO-8601 to aware UTC, `None` when unparseable. A value with no offset is read as UTC, per the GPX spec. |
 | `DEFAULT_MAX_GAP_MIN` | The default match window, `90.0` minutes. |
@@ -184,7 +202,7 @@ Worth knowing before you rely on this.
   no filtering on reported GPS accuracy, and no plausibility check on speed.
 - **No extrapolation.** Before the first point or after the last one, you get that end
   point's own position if it is within the window, and `None` otherwise — never a
-  projected position.
+  projected position. With `strict=True` an end is never snapped to at all.
 
 ## Development
 

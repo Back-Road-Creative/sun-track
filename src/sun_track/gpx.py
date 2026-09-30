@@ -14,7 +14,11 @@ hundredth of a degree.) The position is linearly interpolated between the two
 bracketing track points (longitude along the shorter arc, so a track that
 crosses the 180th meridian stays on it) and accepted whenever the nearer of
 them is within ``max_gap_min`` minutes; tighten that argument when you need a
-real fix rather than a plausible one.
+real fix rather than a plausible one. Where the position is published as
+evidence of where the camera was, pass ``strict=True``: the window then bounds
+the span between the two bracketing points instead, so a capture inside a long
+hole in the track is refused however close it sits to one end.
+:meth:`TrackIndex.fix_at` returns the same position with an ``inferred`` flag.
 
 Parsing never raises past the :func:`load_track_index` boundary: an unreadable
 file is skipped with one warning naming it, and a malformed point is dropped
@@ -30,7 +34,13 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from xml.etree import ElementTree
 
-__all__ = ["DEFAULT_MAX_GAP_MIN", "TrackIndex", "load_track_index", "parse_gpx_time"]
+__all__ = [
+    "DEFAULT_MAX_GAP_MIN",
+    "TrackFix",
+    "TrackIndex",
+    "load_track_index",
+    "parse_gpx_time",
+]
 
 logger = logging.getLogger(__name__)
 
@@ -65,21 +75,69 @@ def parse_gpx_time(text: str) -> datetime | None:
 
 
 @dataclass(frozen=True)
+class TrackFix:
+    """A position from :meth:`TrackIndex.fix_at`.
+
+    ``inferred`` is False only for a position the logger itself recorded at
+    exactly the queried instant; interpolated and end-snapped positions are
+    estimates and are True.
+    """
+
+    lat: float
+    lon: float
+    inferred: bool
+
+
+@dataclass(frozen=True)
 class TrackIndex:
     """UTC-sorted ``(time, lat, lon)`` points gathered from every readable track."""
 
     points: tuple[tuple[datetime, float, float], ...] = ()
 
     def position_at(
-        self, utc: datetime, max_gap_min: float = DEFAULT_MAX_GAP_MIN
+        self,
+        utc: datetime,
+        max_gap_min: float = DEFAULT_MAX_GAP_MIN,
+        *,
+        strict: bool = False,
     ) -> tuple[float, float] | None:
         """The interpolated ``(lat, lon)`` at ``utc``, or None.
 
-        Between two track points: linear interpolation, accepted when the
-        nearer bracket is within ``max_gap_min`` minutes (default
-        :data:`DEFAULT_MAX_GAP_MIN`). Beyond the ends of the track it NEVER
-        extrapolates — before the first point or after the last, that end
-        point's own position is returned if it is within the gap, else None.
+        A thin wrapper over :meth:`fix_at` that drops the ``inferred`` flag;
+        see there for the two gap policies. Use :meth:`fix_at` when the caller
+        must tell a logged position from an estimated one.
+        """
+        fix = self.fix_at(utc, max_gap_min, strict=strict)
+        return None if fix is None else (fix.lat, fix.lon)
+
+    def fix_at(
+        self,
+        utc: datetime,
+        max_gap_min: float = DEFAULT_MAX_GAP_MIN,
+        *,
+        strict: bool = False,
+    ) -> TrackFix | None:
+        """The position at ``utc`` as a :class:`TrackFix`, or None.
+
+        Two gap policies, chosen per call:
+
+        * ``strict=False`` (default, the legacy policy). Between two track
+          points: linear interpolation, accepted when the NEARER bracket is
+          within ``max_gap_min`` minutes (default :data:`DEFAULT_MAX_GAP_MIN`),
+          however wide the hole between them is. Beyond the ends of the track
+          it NEVER extrapolates — before the first point or after the last,
+          that end point's own position is returned if it is within the gap,
+          else None.
+        * ``strict=True``. ``max_gap_min`` becomes the largest allowed SPAN
+          between the two bracketing points: a capture inside a wider hole is
+          refused even when it sits seconds from one end, and a capture before
+          the first or after the last point is refused outright. A capture
+          landing exactly on a logged point is always accepted. Use it where
+          a position is published as evidence of where the camera was.
+
+        ``inferred`` is False only when ``utc`` equals a logged point's
+        timestamp, so the position is the logger's own reading; every
+        interpolated or end-snapped position is True.
 
         A naive ``utc`` raises :class:`ValueError`: a capture clock of unknown
         zone matched against a UTC track would silently place the photo hours
@@ -94,21 +152,29 @@ class TrackIndex:
             return None
         max_gap = timedelta(minutes=max_gap_min)
         i = bisect_left(self.points, utc, key=lambda p: p[0])
+        if i < len(self.points) and self.points[i][0] == utc:
+            return TrackFix(self.points[i][1], self.points[i][2], inferred=False)
         if i == 0:
             first_t, lat, lon = self.points[0]
-            return (lat, lon) if first_t - utc <= max_gap else None
+            if strict or first_t - utc > max_gap:
+                return None
+            return TrackFix(lat, lon, inferred=True)
         if i == len(self.points):
             last_t, lat, lon = self.points[-1]
-            return (lat, lon) if utc - last_t <= max_gap else None
+            if strict or utc - last_t > max_gap:
+                return None
+            return TrackFix(lat, lon, inferred=True)
         t0, lat0, lon0 = self.points[i - 1]
         t1, lat1, lon1 = self.points[i]
-        if min(utc - t0, t1 - utc) > max_gap:
+        if strict:
+            if t1 - t0 > max_gap:
+                return None
+        elif min(utc - t0, t1 - utc) > max_gap:
             return None
-        span = (t1 - t0).total_seconds()
-        if span <= 0:  # duplicate timestamps across files
-            return (lat0, lon0)
-        frac = (utc - t0).total_seconds() / span
-        return (lat0 + frac * (lat1 - lat0), _interpolate_lon(lon0, lon1, frac))
+        frac = (utc - t0).total_seconds() / (t1 - t0).total_seconds()
+        return TrackFix(
+            lat0 + frac * (lat1 - lat0), _interpolate_lon(lon0, lon1, frac), inferred=True
+        )
 
 
 def _interpolate_lon(lon0: float, lon1: float, frac: float) -> float:
