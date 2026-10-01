@@ -19,7 +19,13 @@ that carries a capture time but no GPS::
 Either half works on its own; neither imports the other.
 """
 
-from sun_track.gpx import DEFAULT_MAX_GAP_MIN, TrackIndex, load_track_index, parse_gpx_time
+from sun_track.gpx import (
+    DEFAULT_MAX_GAP_MIN,
+    TrackFix,
+    TrackIndex,
+    load_track_index,
+    parse_gpx_time,
+)
 from sun_track.solar import (
     GOLDEN_ELEVATION_MAX,
     GOLDEN_ELEVATION_MIN,
@@ -34,6 +40,7 @@ __all__ = [
     "DEFAULT_MAX_GAP_MIN",
     "GOLDEN_ELEVATION_MAX",
     "GOLDEN_ELEVATION_MIN",
+    "TrackFix",
     "TrackIndex",
     "__version__",
     "is_golden_at",

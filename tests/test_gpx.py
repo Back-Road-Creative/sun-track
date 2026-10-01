@@ -13,7 +13,13 @@ from pathlib import Path
 
 import pytest
 
-from sun_track.gpx import DEFAULT_MAX_GAP_MIN, TrackIndex, load_track_index, parse_gpx_time
+from sun_track.gpx import (
+    DEFAULT_MAX_GAP_MIN,
+    TrackFix,
+    TrackIndex,
+    load_track_index,
+    parse_gpx_time,
+)
 
 UTC = timezone.utc
 
@@ -218,3 +224,138 @@ def test_parse_gpx_time_accepts_the_shapes_loggers_write(text: str, expected_hou
 @pytest.mark.parametrize("text", ["", "not-a-time", "2026-13-45T99:99:99Z", "yesterday"])
 def test_parse_gpx_time_returns_none_rather_than_raising(text: str) -> None:
     assert parse_gpx_time(text) is None
+
+
+def _two_point_index(lon0: float, lon1: float) -> TrackIndex:
+    return TrackIndex(
+        (
+            (datetime(2026, 7, 30, 12, 0, tzinfo=UTC), 10.0, lon0),
+            (datetime(2026, 7, 30, 12, 10, tzinfo=UTC), 12.0, lon1),
+        )
+    )
+
+
+def _lon_distance_from_date_line(lon: float) -> float:
+    return 180.0 - abs(lon)
+
+
+@pytest.mark.parametrize(("lon0", "lon1"), [(179.0, -179.0), (-179.0, 179.0)])
+def test_interpolation_takes_the_short_arc_across_the_date_line(lon0: float, lon1: float) -> None:
+    """The midpoint of 179 -> -179 is the date line, not the prime meridian."""
+    index = _two_point_index(lon0, lon1)
+    pos = index.position_at(datetime(2026, 7, 30, 12, 5, tzinfo=UTC))
+    assert pos is not None
+    assert pos[0] == pytest.approx(11.0)
+    assert -180.0 <= pos[1] <= 180.0
+    assert _lon_distance_from_date_line(pos[1]) == pytest.approx(0.0, abs=1e-9)
+
+
+def test_date_line_quarter_points_stay_in_range_and_near_the_line() -> None:
+    index = _two_point_index(179.0, -179.0)
+    early = index.position_at(datetime(2026, 7, 30, 12, 2, 30, tzinfo=UTC))
+    late = index.position_at(datetime(2026, 7, 30, 12, 7, 30, tzinfo=UTC))
+    assert early is not None
+    assert late is not None
+    assert early[1] == pytest.approx(179.5)
+    assert late[1] == pytest.approx(-179.5)
+
+
+def test_date_line_endpoints_are_returned_unchanged() -> None:
+    index = _two_point_index(179.0, -179.0)
+    assert index.position_at(datetime(2026, 7, 30, 12, 0, tzinfo=UTC)) == (10.0, 179.0)
+    end = index.position_at(datetime(2026, 7, 30, 12, 10, tzinfo=UTC))
+    assert end == pytest.approx((12.0, -179.0))
+
+
+def test_noncrossing_long_arc_is_still_interpolated_linearly() -> None:
+    """A 100-degree step that does not cross the date line keeps its plain midpoint."""
+    index = _two_point_index(-50.0, 50.0)
+    pos = index.position_at(datetime(2026, 7, 30, 12, 5, tzinfo=UTC))
+    assert pos == pytest.approx((11.0, 0.0))
+
+
+def _three_hour_gap_index() -> TrackIndex:
+    """One track point at 12:00Z and the next at 15:00Z: a three-hour hole."""
+    return TrackIndex(
+        (
+            (datetime(2026, 7, 30, 12, 0, tzinfo=UTC), 40.0, -100.0),
+            (datetime(2026, 7, 30, 15, 0, tzinfo=UTC), 41.8, -101.8),
+        )
+    )
+
+
+def test_legacy_mode_places_a_capture_near_an_endpoint_of_a_three_hour_gap() -> None:
+    """The documented default: nearer bracket within the window is enough."""
+    index = _three_hour_gap_index()
+    near_start = datetime(2026, 7, 30, 12, 10, tzinfo=UTC)
+    assert index.position_at(near_start) == pytest.approx((40.1, -100.1))
+    assert index.position_at(near_start, strict=False) == pytest.approx((40.1, -100.1))
+
+
+def test_strict_mode_refuses_a_capture_inside_a_gap_wider_than_the_limit() -> None:
+    index = _three_hour_gap_index()
+    near_start = datetime(2026, 7, 30, 12, 10, tzinfo=UTC)
+    near_end = datetime(2026, 7, 30, 14, 50, tzinfo=UTC)
+    mid_gap = datetime(2026, 7, 30, 13, 30, tzinfo=UTC)
+    for when in (near_start, near_end, mid_gap):
+        assert index.position_at(when, max_gap_min=90, strict=True) is None
+        assert index.fix_at(when, max_gap_min=90, strict=True) is None
+
+
+def test_strict_mode_interpolates_when_the_bracket_span_fits_the_limit() -> None:
+    index = _three_hour_gap_index()
+    when = datetime(2026, 7, 30, 13, 30, tzinfo=UTC)
+    assert index.position_at(when, max_gap_min=180, strict=True) == pytest.approx((40.9, -100.9))
+
+
+def test_strict_mode_never_snaps_to_an_end_of_the_track() -> None:
+    index = _three_hour_gap_index()
+    before = datetime(2026, 7, 30, 11, 55, tzinfo=UTC)
+    after = datetime(2026, 7, 30, 15, 5, tzinfo=UTC)
+    assert index.position_at(before) == (40.0, -100.0)  # legacy still snaps
+    assert index.position_at(before, strict=True) is None
+    assert index.position_at(after, strict=True) is None
+
+
+def test_strict_mode_accepts_an_exact_track_point_whatever_the_gap() -> None:
+    index = _three_hour_gap_index()
+    on_first = datetime(2026, 7, 30, 12, 0, tzinfo=UTC)
+    on_last = datetime(2026, 7, 30, 15, 0, tzinfo=UTC)
+    assert index.position_at(on_first, max_gap_min=1, strict=True) == (40.0, -100.0)
+    assert index.position_at(on_last, max_gap_min=1, strict=True) == (41.8, -101.8)
+
+
+def test_strict_mode_still_validates_arguments() -> None:
+    index = _three_hour_gap_index()
+    with pytest.raises(ValueError, match="aware"):
+        index.position_at(datetime(2026, 7, 30, 12, 10), strict=True)
+    with pytest.raises(ValueError, match="max_gap_min"):
+        index.position_at(datetime(2026, 7, 30, 12, 10, tzinfo=UTC), max_gap_min=-1, strict=True)
+    assert TrackIndex().position_at(datetime(2026, 7, 30, 12, 10, tzinfo=UTC), strict=True) is None
+
+
+def test_fix_at_marks_interpolated_and_snapped_positions_as_inferred() -> None:
+    index = _three_hour_gap_index()
+    interpolated = index.fix_at(datetime(2026, 7, 30, 13, 30, tzinfo=UTC), max_gap_min=180)
+    assert interpolated is not None
+    assert interpolated.inferred is True
+    assert (interpolated.lat, interpolated.lon) == pytest.approx((40.9, -100.9))
+    snapped = index.fix_at(datetime(2026, 7, 30, 11, 30, tzinfo=UTC))
+    assert snapped == TrackFix(40.0, -100.0, inferred=True)
+
+
+def test_fix_at_marks_an_exact_track_point_as_measured() -> None:
+    index = _three_hour_gap_index()
+    assert index.fix_at(datetime(2026, 7, 30, 12, 0, tzinfo=UTC)) == TrackFix(40.0, -100.0, False)
+    last = index.fix_at(datetime(2026, 7, 30, 15, 0, tzinfo=UTC))
+    assert last is not None
+    assert last.inferred is False
+    assert (last.lat, last.lon) == pytest.approx((41.8, -101.8))
+
+
+def test_position_at_is_fix_at_without_the_flag(two_file_dir: Path) -> None:
+    index = load_track_index(two_file_dir)
+    when = datetime(2026, 7, 30, 12, 5, tzinfo=UTC)
+    fix = index.fix_at(when)
+    assert fix is not None
+    assert index.position_at(when) == (fix.lat, fix.lon)
